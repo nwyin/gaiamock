@@ -191,6 +191,20 @@ def test_rejection_sampling_gpu_matches_gsl(n_samp):
         np.testing.assert_allclose(lnL_gpu, lnL_cpu, rtol=1e-9)
 
 
+def test_rejection_sampling_gpu_bucketed_n_obs():
+    '''zero-weight N_obs bucket padding produces exact likelihoods across varying epoch counts'''
+    pytest.importorskip('jax')
+    c_funcs = gaiamock.read_in_C_functions()
+    base = synthetic_epoch_astrometry(np.random.default_rng(31), c_funcs, period=300.0, ecc=0.4, a0_mas=1.5)
+    np.random.seed(31)
+    samples = gaiamock.generate_prior_samples(500)
+    for n_obs in [33, 64, 65, 75]:
+        d = tuple(a[:n_obs].copy() for a in base)
+        lnL_gpu = gaiamock.get_astrometric_likelihoods(*d, samples, backend='gpu', chunk_size=1024)
+        lnL_cpu = gaiamock.get_astrometric_likelihoods_worker(*d, samples)
+        np.testing.assert_allclose(lnL_gpu, lnL_cpu, rtol=1e-9)
+
+
 def test_grid_chi2_approximation():
     '''the approximate chi2 used to rank the v2 eccentric grid should be close to the exact chi2 at the grid eccentricities'''
     rng = np.random.default_rng(9)

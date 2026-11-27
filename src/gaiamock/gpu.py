@@ -160,16 +160,26 @@ def has_gpu_accelerator():
         return False
 
 
+def _bucket_n_obs(n):
+    '''Round n_obs up to a fixed bucket size so XLA compiles only a handful of shapes across stars.'''
+    n = max(1, int(n))
+    step = 32 if n <= 256 else (128 if n <= 1024 else 256)
+    return ((n + step - 1) // step) * step
+
+
 def _build_workspace(t_ast_yr, psi, plx_factor, ast_obs, ast_err):
     t = np.asarray(t_ast_yr, dtype=np.float64)
     psi = np.asarray(psi, dtype=np.float64)
     pf = np.asarray(plx_factor, dtype=np.float64)
     y = np.asarray(ast_obs, dtype=np.float64)
     err = np.asarray(ast_err, dtype=np.float64)
+    n = len(t)
+    n_pad = _bucket_n_obs(n)
     iw = 1.0 / err
-    a = 2.0 * np.pi * t * 365.25
+    a = np.zeros(n_pad, dtype=np.float64)
+    a[:n] = 2.0 * np.pi * t * 365.25
     sw, cw, r0 = np.sin(psi) * iw, np.cos(psi) * iw, y * iw
-    Q = np.zeros((5, len(t)), dtype=np.float64)
+    Q = np.zeros((5, n), dtype=np.float64)
     nq = 0
     for col in (sw, t * sw, cw, t * cw, pf * iw):
         v = col.copy()
@@ -184,13 +194,17 @@ def _build_workspace(t_ast_yr, psi, plx_factor, ast_obs, ast_err):
     for _ in range(2):
         for k in range(nq):
             r0 -= np.dot(Q[k], r0) * Q[k]
-    W = np.zeros((len(t), 12), dtype=np.float64)
+    W = np.zeros((n_pad, 12), dtype=np.float64)
     for k in range(nq):
-        W[:, k] = Q[k] * sw
-        W[:, 5 + k] = Q[k] * cw
-    W[:, 10] = r0 * sw
-    W[:, 11] = r0 * cw
-    return a, W, sw * sw, sw * cw, cw * cw, float(np.dot(r0, r0))
+        W[:n, k] = Q[k] * sw
+        W[:n, 5 + k] = Q[k] * cw
+    W[:n, 10] = r0 * sw
+    W[:n, 11] = r0 * cw
+    s2 = np.zeros(n_pad, dtype=np.float64)
+    sc = np.zeros(n_pad, dtype=np.float64)
+    c2 = np.zeros(n_pad, dtype=np.float64)
+    s2[:n], sc[:n], c2[:n] = sw * sw, sw * cw, cw * cw
+    return a, W, s2, sc, c2, float(np.dot(r0, r0))
 
 
 def get_astrometric_likelihoods_gpu(t_ast_yr, psi, plx_factor, ast_obs, ast_err, samples,
